@@ -25,7 +25,7 @@ namespace StrategyDirectorMod
         public bool ShowStaffCard = true;
         public bool DetailsScreen = true;
         public int RenewalNoticeDays = 60;
-        public string CopyLogsToFolder = @"C:\Users\kyled\Desktop\Claude Cowork\projects\motorsport-manager-mods\inputs\logs";
+        public string CopyLogsToFolder = "";  // optional extra folder for log copies; blank = only Mods\StrategyDirector\logs
 
         // "playerId=ticks" pairs: when each career last got an applicants mail.
         public List<string> OfferedLog = new List<string>();
@@ -70,7 +70,7 @@ namespace StrategyDirectorMod
         {
             Entry = modEntry;
             Settings = UnityModManager.ModSettings.Load<Settings>(modEntry);
-            // 0.4.4: logs moved to inputs\logs in the Cowork project.
+            // 0.4.4 migration: a configured "...\inputs" folder gets "\logs" appended.
             if (Settings.CopyLogsToFolder != null && Settings.CopyLogsToFolder.TrimEnd('\\').EndsWith(@"motorsport-manager-mods\inputs"))
             {
                 Settings.CopyLogsToFolder = Settings.CopyLogsToFolder.TrimEnd('\\') + @"\logs";

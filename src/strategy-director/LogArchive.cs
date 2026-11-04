@@ -10,7 +10,7 @@ namespace StrategyDirectorMod
     /// was lost whenever the game was closed before copying it. This keeps a copy per game launch,
     /// refreshed after every session (practice, qualifying, race) and when the game quits:
     ///   Mods\StrategyDirector\logs\output_log yyyy-MM-dd HHmm.txt
-    /// and the same file in Settings.CopyLogsToFolder (Kyle's Cowork inputs folder) if it exists.
+    /// and the same file in Settings.CopyLogsToFolder (optional; set in the UMM panel) if it exists.
     /// </summary>
     internal static class LogArchive
     {
