@@ -849,6 +849,13 @@ namespace StrategyDirectorMod
                     return;
                 }
                 int stint = plan.NextStintIndex(v, onGrid);
+                if (stint >= plan.options.Length && plan.resolvedOnGrid && !onGrid && v.timer.stops == plan.baseStops
+                    && v.pathState != null && !v.pathState.IsInPitlaneArea())
+                {
+                    // 1.0.2: the car is on its last planned stint and still on track; this is the game
+                    // asking "what would I fit?" for a weather check, not a stop. Keep the plan.
+                    return;
+                }
                 if (stint >= plan.options.Length)
                 {
                     // Out of plan (the rain didn't come when expected, or an unplanned stop): redraw.
@@ -902,7 +909,23 @@ namespace StrategyDirectorMod
             // stint behind (0.1.1-0.3.3): the start compound was fitted again and the last planned
             // compound never used.
             bool startPlan = onGrid || (Game.instance.sessionManager.lap == 0 && v.timer.stops == 0);
-            plan = options == null ? null : new PlanInfo { options = options, baseStops = v.timer.stops, resolvedOnGrid = startPlan, windowEndLap = windowEnd };
+            // 1.0.2: a plan drawn out on track while the car already runs the plan's first compound
+            // (after a weather or hand-back stop) starts with the tyres on the car. Treating them as
+            // "next stint" left a phantom stop owed, and the safety-car rule boxed for it (Milan 11/05:
+            // Schmidt pitted on 93% Softs from P1-pace to P16; Lara on 85% Softs). timer.stops only
+            // counts a stop at pit exit, so plans drawn in the pitlane are left as they were.
+            bool runningFirst = false;
+            if (!startPlan && options != null && options.Length > 0 && v.pathState != null && !v.pathState.IsInPitlaneArea())
+            {
+                TyreSet cur = v.setup.currentSetup.tyreSet;
+                if (cur != null && cur.GetTread() == TyreSet.Tread.Slick && strategy.GetOptionFromCompound(cur.GetCompound()) == options[0])
+                {
+                    runningFirst = true;
+                    Main.Log(string.Format("PLAN: {0}, {1} — already on {2}; counting the tyres on the car as stint 1.",
+                        RaceState.DriverName(v), RaceState.LapText(), cur.GetCompound()));
+                }
+            }
+            plan = options == null ? null : new PlanInfo { options = options, baseStops = v.timer.stops, resolvedOnGrid = startPlan || runningFirst, windowEndLap = windowEnd };
             RaceState.Plans[v] = plan;
             return plan;
         }
@@ -1719,6 +1742,7 @@ namespace StrategyDirectorMod
                 case SessionStints.ReasonForStint.PitConditionFix: return "part repair";
                 case SessionStints.ReasonForStint.PitRefuel: return "fuel";
                 case SessionStints.ReasonForStint.DriverSwap: return "driver swap";
+                case SessionStints.ReasonForStint.None: return "unplanned stop (game or manual)";
                 default: return r.ToString();
             }
         }

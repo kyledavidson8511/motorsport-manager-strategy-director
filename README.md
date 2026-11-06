@@ -5,7 +5,7 @@ Strategy Director adds a hireable race strategist who can execute an agreed pre-
 ## Install
 
 1. Install Unity Mod Manager for Motorsport Manager.
-2. Download `StrategyDirector-1.0.1.zip` from the GitHub Release.
+2. Download `StrategyDirector-1.0.2.zip` from the GitHub Release.
 3. Extract the `StrategyDirector` folder to `Steam/steamapps/common/Motorsport Manager/Mods/`.
 4. Start the game and confirm **Strategy Director** is active in UMM.
 
