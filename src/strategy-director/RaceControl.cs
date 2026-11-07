@@ -810,17 +810,18 @@ namespace StrategyDirectorMod
                 Main.Log(string.Format("{0}: {1}, {2} — the pit wall was slow to react; no stop.", label, who, RaceState.LapText()));
                 return false;
             }
+            // 1.1.1: checked before the plan, so a car already boxing is never credited to the call.
+            if (v.strategy.IsGoingToPit())
+            {
+                Main.Log(string.Format("{0}: {1}, {2} — already coming in.", label, who, RaceState.LapText()));
+                return false;
+            }
             PlanInfo plan;
             bool hasPlan = RaceState.Plans.TryGetValue(v, out plan) && plan != null;
             bool gamble = RaceState.PlanFor(v) == PlanType.Gamble;
             if (!hasPlan || (!Main.Settings.PitUnderSafetyCar && !gamble))
             {
                 return !vsc;
-            }
-            if (v.strategy.IsGoingToPit())
-            {
-                Main.Log(string.Format("{0}: {1}, {2} — already coming in.", label, who, RaceState.LapText()));
-                return false;
             }
             SessionManager sm = Game.instance.sessionManager;
             int lapsLeft = sm.GetLapsRemaining();

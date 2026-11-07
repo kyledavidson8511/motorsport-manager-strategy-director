@@ -5,7 +5,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>StrategyDirector</AssemblyName>
     <RootNamespace>StrategyDirectorMod</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Nullable>disable</Nullable>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
