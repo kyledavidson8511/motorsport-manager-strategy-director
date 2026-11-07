@@ -683,12 +683,262 @@ namespace StrategyDirectorMod
         }
     }
 
-    /// <summary>Safety car: the director's reaction roll decides whether the call is made; Gamble pits for free.</summary>
+    /// <summary>
+    /// 1.1.0: safety car and VSC calls. The director makes one call per neutralised period, at the
+    /// first chance, and refines the plan for the laps left instead of only asking "can the plan's
+    /// next tyre reach the flag?".
+    /// Milan 11/07, lap 5/14: both cars owed a stop on a Soft→Soft / Medium→Soft plan. A Soft (~8
+    /// laps) couldn't reach the flag, so both stayed out; the top six boxed onto Mediums for the last
+    /// 9 laps. On lap 7 Schmidt re-entered the safety-car train, the event fired again, Softs now
+    /// reached, and he boxed from P1 as the safety car came in: P19, +24s.
+    /// </summary>
+    internal static class SafetyCarCall
+    {
+        /// <summary>Bumped whenever a safety car or VSC period starts.</summary>
+        public static int Period;
+        private static readonly Dictionary<int, int> sDecided = new Dictionary<int, int>();
+        private static readonly FieldInfo sReason = AccessTools.Field(typeof(SessionStrategy), "mReasonForPreviousPit");
+
+        public static void OnFlag(SessionManager.Flag from, SessionManager.Flag to)
+        {
+            bool wasNeutral = from == SessionManager.Flag.SafetyCar || from == SessionManager.Flag.VirtualSafetyCar;
+            bool isNeutral = to == SessionManager.Flag.SafetyCar || to == SessionManager.Flag.VirtualSafetyCar;
+            if (isNeutral && !wasNeutral)
+            {
+                Period++;
+            }
+        }
+
+        /// <summary>True once the safety car has been told to come in (its last lap).</summary>
+        public static bool SafetyCarComingIn()
+        {
+            try
+            {
+                Vehicle sv = Game.instance.vehicleManager.safetyVehicle;
+                if (sv == null) return false;
+                AISafetyCarBehaviour b = sv.behaviourManager.GetBehaviour<AISafetyCarBehaviour>();
+                return b != null && b.headingToGarage;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Observed-vs-model wear scale for this car's tyres (1 = wearing as the game says).</summary>
+        private static float WearScale(RacingVehicle v, float lapLength)
+        {
+            float seen;
+            TyreSet cur = v.setup.currentSetup.tyreSet;
+            float model = cur != null ? lapLength / Math.Max(1f, cur.GetMaxDistance()) : 0f;
+            if (model > 0f && RaceState.LastLapWear.TryGetValue(v.carID, out seen) && seen > model) return model / seen;
+            return 1f;
+        }
+
+        /// <summary>
+        /// The fastest compound with a fresh set that runs the laps left on its own: of the sets that
+        /// reach, the one with the shortest life (softest). Null when none reaches.
+        /// </summary>
+        public static TyreSet BestToFlag(SessionStrategy s, RacingVehicle v, int laps, out SessionStrategy.TyreOption option, out float reachLaps)
+        {
+            option = SessionStrategy.TyreOption.First;
+            reachLaps = 0f;
+            float lapLength = Math.Max(1f, v.pathController.GetPathData(PathController.PathType.Track).length);
+            float scale = WearScale(v, lapLength);
+            TyreSet best = null;
+            foreach (SessionStrategy.TyreOption o in new[] { SessionStrategy.TyreOption.First, SessionStrategy.TyreOption.Second, SessionStrategy.TyreOption.Third })
+            {
+                TyreSet t = null;
+                try { t = s.GetTyreInBestCondition(o); } catch (Exception) { }
+                if (t == null || t.GetTread() != TyreSet.Tread.Slick) continue;
+                float r = t.GetOptimalTyreDistance() / lapLength * scale;
+                if (r < laps) continue;
+                if (best == null || r < reachLaps)
+                {
+                    best = t;
+                    option = o;
+                    reachLaps = r;
+                }
+            }
+            return best;
+        }
+
+        private static float CurrentReach(RacingVehicle v)
+        {
+            TyreSet cur = v.setup.currentSetup.tyreSet;
+            if (cur == null) return 0f;
+            float lapLength = Math.Max(1f, v.pathController.GetPathData(PathController.PathType.Track).length);
+            return cur.GetOptimalTyreDistance() / lapLength * WearScale(v, lapLength);
+        }
+
+        private static string PlanText(SessionStrategy s, PlanInfo plan)
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; plan != null && plan.options != null && i < plan.options.Length; i++)
+            {
+                TyreSet t = null;
+                try { t = s.GetTyreInBestCondition(plan.options[i]); } catch (Exception) { }
+                if (sb.Length > 0) sb.Append(" → ");
+                sb.Append(t != null ? t.GetCompound().ToString() : plan.options[i].ToString());
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>The call. Returns true when the game's own rule should run instead (no dry plan).</summary>
+        public static bool Decide(SessionStrategy s, RacingVehicle v, bool vsc)
+        {
+            string label = vsc ? "VSC" : "SAFETY CAR";
+            string who = RaceState.DriverName(v);
+            if (v.pathState != null && v.pathState.IsInPitlaneArea())
+            {
+                // Already in the pit lane: decide when he's back out, if the period is still on.
+                return false;
+            }
+            int seen;
+            if (sDecided.TryGetValue(v.carID, out seen) && seen == Period)
+            {
+                // One call per period. Re-entering the train (after a pit stop, a lock-up, a run wide)
+                // fires the event again, but the cheap moment was the first one.
+                return false;
+            }
+            sDecided[v.carID] = Period;
+
+            RaceState.Calls++;
+            if (RaceState.Roll() > RaceState.ReactionChance(v, false))
+            {
+                RaceState.MissedCalls++;
+                Main.Log(string.Format("{0}: {1}, {2} — the pit wall was slow to react; no stop.", label, who, RaceState.LapText()));
+                return false;
+            }
+            PlanInfo plan;
+            bool hasPlan = RaceState.Plans.TryGetValue(v, out plan) && plan != null;
+            bool gamble = RaceState.PlanFor(v) == PlanType.Gamble;
+            if (!hasPlan || (!Main.Settings.PitUnderSafetyCar && !gamble))
+            {
+                return !vsc;
+            }
+            if (v.strategy.IsGoingToPit())
+            {
+                Main.Log(string.Format("{0}: {1}, {2} — already coming in.", label, who, RaceState.LapText()));
+                return false;
+            }
+            SessionManager sm = Game.instance.sessionManager;
+            int lapsLeft = sm.GetLapsRemaining();
+            // Plan the dry spell only, if rain is expected before the flag.
+            int target = plan.windowEndLap > 0 ? Math.Min(lapsLeft, Math.Max(1, plan.windowEndLap - sm.lap)) : lapsLeft;
+            if (lapsLeft <= 3)
+            {
+                Main.Log(string.Format("{0}: {1}, {2} — staying out: too few laps left.", label, who, RaceState.LapText()));
+                return false;
+            }
+            if (!vsc && SafetyCarComingIn())
+            {
+                Main.Log(string.Format("{0}: {1}, {2} — staying out: the safety car comes in this lap, so a stop now costs nearly a full green-flag stop.", label, who, RaceState.LapText()));
+                return false;
+            }
+            if (vsc)
+            {
+                float left = sm.raceDirector.crashDirector.virtualSafetyCarTimer;
+                float lapTime = v.timer.averageLapTime > 1f ? v.timer.averageLapTime : 90f;
+                float toPits = Mathf.Clamp01(1f - v.pathController.distanceAlongTrackPath01) * lapTime * 1.4f;
+                if (toPits > left)
+                {
+                    Main.Log(string.Format("{0}: {1}, {2} — staying out: the VSC (~{3:0}s left) will be over before he reaches the pit entry (~{4:0}s).", label, who, RaceState.LapText(), left, toPits));
+                    return false;
+                }
+            }
+
+            int owed = plan.StopsRemaining(v);
+            TyreSet tyres = v.setup.currentSetup.tyreSet;
+            float cond = tyres != null ? tyres.GetCondition() : 0f;
+            SessionStrategy.TyreOption opt;
+            float reach;
+            TyreSet toFlag = BestToFlag(s, v, target, out opt, out reach);
+            string toWhat = target < lapsLeft ? "to the rain" : "to the flag";
+
+            if (owed > 0 || gamble)
+            {
+                if (toFlag != null)
+                {
+                    // Refine: the stop still owed, taken now, on whatever runs to the end.
+                    string before = PlanText(s, plan);
+                    RaceState.Plans[v] = new PlanInfo { options = new[] { opt }, baseStops = v.timer.stops, resolvedOnGrid = false, windowEndLap = plan.windowEndLap };
+                    Main.Log(string.Format("{0}: {1}, {2} — plan refined: was {3} ({4} stop(s) left); box now for {5} (~{6:0} laps) {7}, {8} to go (tyres {9:0%}).",
+                        label, who, RaceState.LapText(), before, owed, toFlag.GetCompound(), reach, toWhat, target, cond));
+                    Box(s, v);
+                    return false;
+                }
+                string sets;
+                float planReach = RaceState.PlanReach(s, v, plan, out sets);
+                if (owed > 1 && planReach >= target)
+                {
+                    // Several stops still owed and no single set reaches: take one of them now.
+                    Main.Log(string.Format("{0}: {1}, {2} — the plan still owes {3} stops; taking one now while it's cheap ({4} for {5} to go).",
+                        label, who, RaceState.LapText(), owed, sets, target));
+                    Box(s, v);
+                    return false;
+                }
+                Main.Log(string.Format("{0}: {1}, {2} — staying out: no fresh set runs {3} laps {4}, so stopping now would cost a second stop (tyres {5:0%}).",
+                    label, who, RaceState.LapText(), target, toWhat, cond));
+                return false;
+            }
+
+            float curReach = CurrentReach(v);
+            if (toFlag != null && (curReach < target || (target >= 5 && cond < 0.6f)))
+            {
+                RaceState.Plans[v] = new PlanInfo { options = new[] { opt }, baseStops = v.timer.stops, resolvedOnGrid = false, windowEndLap = plan.windowEndLap };
+                Main.Log(string.Format("{0}: {1}, {2} — no stop owed, but tyres are {3:0%} (~{4:0} laps) with {5} to go; fresh {6} (~{7:0} laps) {8} while it's cheap.",
+                    label, who, RaceState.LapText(), cond, curReach, target, toFlag.GetCompound(), reach, toWhat));
+                Box(s, v);
+                return false;
+            }
+            Main.Log(string.Format("{0}: {1}, {2} — staying out: no stop owed and tyres {3:0%} (~{4:0} laps) are fine for {5} to go.",
+                label, who, RaceState.LapText(), cond, curReach, target));
+            return false;
+        }
+
+        private static void Box(SessionStrategy s, RacingVehicle v)
+        {
+            bool entered = Context.Enter(v);
+            try
+            {
+                // Reason first: PlanPitstop calls the car in straight away and the pit log reads it.
+                sReason.SetValue(s, SessionStints.ReasonForStint.PitTyreChange);
+                Traverse.Create(s).Method("PlanPitstop").GetValue();
+                sReason.SetValue(s, SessionStints.ReasonForStint.PitTyreChange);
+            }
+            finally
+            {
+                Context.Exit(entered);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(SessionManager), "SetDesiredFlag")]
+    internal static class FlagPeriodPatch
+    {
+        private static void Prefix(SessionManager __instance, out SessionManager.Flag __state)
+        {
+            __state = __instance.flag;
+        }
+
+        private static void Postfix(SessionManager __instance, SessionManager.Flag __state)
+        {
+            try
+            {
+                SafetyCarCall.OnFlag(__state, __instance.flag);
+            }
+            catch (Exception)
+            {
+            }
+        }
+    }
+
+    /// <summary>Safety car: the game's event (fires when a car joins the safety-car train).</summary>
     [HarmonyPatch(typeof(SessionStrategy), "OnSafetyCarEvent")]
     internal static class Ctx_OnSafetyCarEvent
     {
         private static bool sRanOriginal;
-        private static readonly FieldInfo sReason = AccessTools.Field(typeof(SessionStrategy), "mReasonForPreviousPit");
 
         private static bool Prefix(SessionStrategy __instance, out bool __state)
         {
@@ -701,68 +951,13 @@ namespace StrategyDirectorMod
             }
             try
             {
-                RaceState.Calls++;
-                if (RaceState.Roll() > RaceState.ReactionChance(v, false))
-                {
-                    RaceState.MissedCalls++;
-                    Main.Log(string.Format("SAFETY CAR: {0}, {1} — the pit wall was slow to react; no stop.", RaceState.DriverName(v), RaceState.LapText()));
-                    return false;
-                }
-                PlanInfo plan;
-                int lapsLeft = Game.instance.sessionManager.GetLapsRemaining();
-                bool hasPlan = RaceState.Plans.TryGetValue(v, out plan) && plan != null;
-                bool owed = hasPlan && plan.StopsRemaining(v) > 0;
-                bool gamble = RaceState.PlanFor(v) == PlanType.Gamble;
-                if (!hasPlan || (!Main.Settings.PitUnderSafetyCar && !gamble))
+                if (SafetyCarCall.Decide(__instance, v, false))
                 {
                     // No dry plan (wet running) or SC stops switched off: the game's own rule decides.
                     sRanOriginal = true;
                     __state = Context.Enter(v);
                     return true;
                 }
-                if (v.strategy.IsGoingToPit())
-                {
-                    Main.Log(string.Format("SAFETY CAR: {0}, {1} — already coming in.", RaceState.DriverName(v), RaceState.LapText()));
-                    return false;
-                }
-                if (owed && lapsLeft > 3 && (gamble || Main.Settings.PitUnderSafetyCar))
-                {
-                    // 0.5.4: only if the rest of the plan then reaches the flag. Stopping early only to
-                    // need another stop later throws track position away (Tondela lap 2/17: Mediums at
-                    // 80%, a fresh Soft lasts ~9 laps, 15 to go; Lara pitted from P1 into a 2-stop).
-                    string sets;
-                    float reach = RaceState.PlanReach(__instance, v, plan, out sets);
-                    if (reach < lapsLeft)
-                    {
-                        TyreSet cur = v.setup.currentSetup.tyreSet;
-                        Main.Log(string.Format("SAFETY CAR: {0}, {1} — staying out: a stop now leaves {2} (~{3:0} laps) for {4} to go, so it would cost a second stop (tyres {5:0%}).",
-                            RaceState.DriverName(v), RaceState.LapText(), sets.Length > 0 ? sets : "no sets", reach, lapsLeft, cur != null ? cur.GetCondition() : 0f));
-                        return false;
-                    }
-                    __state = Context.Enter(v);
-                    Traverse.Create(__instance).Method("PlanPitstop").GetValue();
-                    sReason.SetValue(__instance, SessionStints.ReasonForStint.PitTyreChange);
-                    Main.Log(string.Format(gamble
-                        ? "SAFETY CAR: {0}, {1} — the gamble pays: box for a cheap stop."
-                        : "SAFETY CAR: {0}, {1} — the plan still owes a stop ({2} left); taking it now while it's cheap.",
-                        RaceState.DriverName(v), RaceState.LapText(), plan.StopsRemaining(v)));
-                    return false;
-                }
-                TyreSet tyres = v.setup.currentSetup.tyreSet;
-                if (!owed && Main.Settings.PitUnderSafetyCar && lapsLeft >= 5 && tyres != null && tyres.GetCondition() < 0.6f
-                    && tyres.GetTread() == SessionStrategy.GetRecommendedTreadRightNow() && FreshSetReaches(__instance, v, lapsLeft))
-                {
-                    __state = Context.Enter(v);
-                    RaceState.Plans.Remove(v); // the plan is redrawn for the laps left when the new set goes on
-                    Traverse.Create(__instance).Method("PlanPitstop").GetValue();
-                    sReason.SetValue(__instance, SessionStints.ReasonForStint.PitTyreChange);
-                    Main.Log(string.Format("SAFETY CAR: {0}, {1} — no stop owed, but tyres are {2:0%} with {3} laps left; fresh rubber while it's cheap.",
-                        RaceState.DriverName(v), RaceState.LapText(), tyres.GetCondition(), lapsLeft));
-                    return false;
-                }
-                Main.Log(string.Format("SAFETY CAR: {0}, {1} — staying out: {2}.", RaceState.DriverName(v), RaceState.LapText(),
-                    lapsLeft <= 3 ? "too few laps left" :
-                    tyres != null ? string.Format("no stop owed and tyres {0:0%} are fine", tyres.GetCondition()) : "no stop owed"));
                 return false;
             }
             catch (Exception e)
@@ -770,24 +965,6 @@ namespace StrategyDirectorMod
                 Main.Error("Safety car call failed: " + e);
                 return true;
             }
-        }
-
-        /// <summary>An extra stop only makes sense if one fresh set can run to the flag.</summary>
-        private static bool FreshSetReaches(SessionStrategy s, RacingVehicle v, int lapsLeft)
-        {
-            float lapLength = Math.Max(1f, v.pathController.GetPathData(PathController.PathType.Track).length);
-            float scale = 1f;
-            float seen;
-            TyreSet cur = v.setup.currentSetup.tyreSet;
-            float model = cur != null ? lapLength / Math.Max(1f, cur.GetMaxDistance()) : 0f;
-            if (model > 0f && RaceState.LastLapWear.TryGetValue(v.carID, out seen) && seen > model) scale = model / seen;
-            foreach (SessionStrategy.TyreOption o in new[] { SessionStrategy.TyreOption.First, SessionStrategy.TyreOption.Second, SessionStrategy.TyreOption.Third })
-            {
-                TyreSet t = null;
-                try { t = s.GetTyreInBestCondition(o); } catch (Exception) { }
-                if (t != null && t.GetOptimalTyreDistance() / lapLength * scale >= lapsLeft) return true;
-            }
-            return false;
         }
 
         private static void Postfix(SessionStrategy __instance)
@@ -803,6 +980,32 @@ namespace StrategyDirectorMod
         {
             Context.Exit(__state);
             return __exception;
+        }
+    }
+
+    /// <summary>VSC: the game has no strategy event for it, so the director's call hooks the car joining the VSC.</summary>
+    [HarmonyPatch(typeof(AISafetyFlagBehaviour), "OnEnter")]
+    internal static class VscEnterPatch
+    {
+        private static void Postfix(AISafetyFlagBehaviour __instance)
+        {
+            try
+            {
+                if (Game.instance.sessionManager.flag != SessionManager.Flag.VirtualSafetyCar)
+                {
+                    return;
+                }
+                RacingVehicle v = Traverse.Create(__instance).Field("mRacingVehicle").GetValue<RacingVehicle>();
+                if (v == null || !v.isPlayerDriver || !RaceState.InRace() || !Context.Worth(v) || !RaceState.IsControlled(v))
+                {
+                    return;
+                }
+                SafetyCarCall.Decide(v.strategy, v, true);
+            }
+            catch (Exception e)
+            {
+                Main.Error("VSC call failed: " + e);
+            }
         }
     }
 
@@ -849,11 +1052,12 @@ namespace StrategyDirectorMod
                     return;
                 }
                 int stint = plan.NextStintIndex(v, onGrid);
-                if (stint >= plan.options.Length && plan.resolvedOnGrid && !onGrid && v.timer.stops == plan.baseStops
+                if (stint == plan.options.Length && !onGrid
                     && v.pathState != null && !v.pathState.IsInPitlaneArea())
                 {
                     // 1.0.2: the car is on its last planned stint and still on track; this is the game
                     // asking "what would I fit?" for a weather check, not a stop. Keep the plan.
+                    // 1.1.0: any plan whose stops are all done (incl. one refined under a safety car).
                     return;
                 }
                 if (stint >= plan.options.Length)

@@ -2,7 +2,7 @@
   "Id": "StrategyDirector",
   "DisplayName": "Strategy Director",
   "Author": "Kyle & Claude",
-  "Version": "1.0.2",
+  "Version": "1.1.0",
   "ManagerVersion": "0.27.0",
   "AssemblyName": "StrategyDirector.dll",
   "EntryMethod": "StrategyDirectorMod.Main.Load"

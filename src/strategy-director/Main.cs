@@ -176,7 +176,7 @@ namespace StrategyDirectorMod
             Settings.RunQualifying = GUILayout.Toggle(Settings.RunQualifying, " Director runs qualifying (qualifies on the race start tyre where it's locked in)");
             Settings.TimedQualifyingRuns = GUILayout.Toggle(Settings.TimedQualifyingRuns, " Qualifying: early banker lap, then a final run timed to start its flying lap before the flag (fresh tyres both runs)");
             Settings.StretchForTrackPosition = GUILayout.Toggle(Settings.StretchForTrackPosition, " Race: stretch the tyres to hold track position when running top 3 or 3+ places above the forecast");
-            Settings.PitUnderSafetyCar = GUILayout.Toggle(Settings.PitUnderSafetyCar, " Race: under a safety car, take any stop the plan still owes (or fresh tyres if they're worn and 5+ laps remain)");
+            Settings.PitUnderSafetyCar = GUILayout.Toggle(Settings.PitUnderSafetyCar, " Race: under a safety car or VSC, refine the plan: take an owed stop now on the tyre that reaches the flag (or fresh tyres if worn)");
             Settings.FixDoubleClutch = GUILayout.Toggle(Settings.FixDoubleClutch, " Practice/qualifying: stop the car turning back into the garage when it's sent out (double-clutch fix)");
             Settings.ReviewAfterQualifying = GUILayout.Toggle(Settings.ReviewAfterQualifying, " Director reviews the race plan after qualifying");
             Settings.RefineSetups = GUILayout.Toggle(Settings.RefineSetups, " Engineer refines the Auto Setup baseline between practice runs (driver feedback + mechanic)");
