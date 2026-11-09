@@ -2,10 +2,12 @@
 
 Strategy Director adds a hireable race strategist who can execute an agreed pre-race plan for the player’s drivers: practice, qualifying, tyre strategy, pace, fuel, weather calls, safety-car calls, and undercuts.
 
+**Download:** [Nexus Mods](https://www.nexusmods.com/motorsportmanager/mods/28) · [GitHub releases](https://github.com/kyledavidson8511/motorsport-manager-strategy-director/releases)
+
 ## Install
 
 1. Install Unity Mod Manager for Motorsport Manager.
-2. Download `StrategyDirector-1.1.0.zip` from the GitHub Release.
+2. Download `StrategyDirector-1.1.1.zip` from [Nexus Mods](https://www.nexusmods.com/motorsportmanager/mods/28) or the [latest GitHub release](https://github.com/kyledavidson8511/motorsport-manager-strategy-director/releases/latest).
 3. Extract the `StrategyDirector` folder to `Steam/steamapps/common/Motorsport Manager/Mods/`.
 4. Start the game and confirm **Strategy Director** is active in UMM.
 
